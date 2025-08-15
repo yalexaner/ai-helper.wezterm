@@ -116,11 +116,22 @@ local function merge_config(user_config)
     return config
 end
 
--- Show loading indicator
-local function show_loading(pane, show)
-    if show then
-        pane:inject_output("\r\n🤖 AI is thinking...")
+-- Variables to store AI mode state
+local ai_mode_active = false
+local ai_response_data = {}
+
+-- Handle keypress in AI mode
+local function handle_ai_keypress(key, pane)
+    if not ai_mode_active then
+        return false
     end
+    
+    local handled = handle_ai_choice(pane, key, ai_response_data.command)
+    if handled then
+        ai_mode_active = false
+        ai_response_data = {}
+    end
+    return handled
 end
 
 -- os-specific line clearing function
@@ -133,6 +144,67 @@ local function clear_current_line(pane)
         pane:send_text("\u{15}") -- ctrl+u to clear line
     end
 end
+
+-- alternate screen buffer functions for ai interaction
+local function enter_ai_mode(pane)
+    -- enter alternate screen buffer (like vim, fzf)
+    pane:send_text("\x1b[?1049h")
+    -- clear screen and move to top
+    pane:send_text("\x1b[2J\x1b[H")
+end
+
+local function exit_ai_mode(pane)
+    -- exit alternate screen buffer, restore original shell
+    pane:send_text("\x1b[?1049l")
+end
+
+local function display_ai_interface(pane, content, command)
+    -- clear screen and display ai interaction
+    pane:send_text("\x1b[2J\x1b[H")
+    
+    -- display ai response
+    if content and content ~= "" then
+        pane:send_text("💬 " .. content:gsub("[\n]", "\r\n") .. "\r\n\r\n")
+    end
+    
+    -- display command if present
+    if command and command ~= "" then
+        pane:send_text("📋 Suggested command: " .. command .. "\r\n\r\n")
+    end
+    
+    -- display options
+    pane:send_text("Options:\r\n")
+    if command and command ~= "" then
+        pane:send_text("  [I] Insert command into shell\r\n")
+        pane:send_text("  [C] Copy command to clipboard\r\n")
+    end
+    pane:send_text("  [Q] Quit (return to shell)\r\n\r\n")
+    pane:send_text("Choose an option: ")
+end
+
+local function handle_ai_choice(pane, choice, command)
+    choice = choice:upper()
+    
+    if choice == "I" and command and command ~= "" then
+        -- insert command into shell
+        exit_ai_mode(pane)
+        pane:send_text(command)
+        return true
+    elseif choice == "C" and command and command ~= "" then
+        -- copy to clipboard
+        wezterm.copy_to_clipboard(command)
+        exit_ai_mode(pane)
+        return true
+    elseif choice == "Q" then
+        -- quit - just exit ai mode
+        exit_ai_mode(pane)
+        return true
+    else
+        -- invalid choice, stay in ai mode
+        return false
+    end
+end
+
 
 -- Clean up AI response by removing markdown code fences
 local function clean_response(response)
@@ -174,21 +246,26 @@ local function parse_ai_response(response)
     }
 end
 
--- Send command to AI and handle response
+-- Send command to AI and handle response using alternate screen
 local function handle_ai_request(window, pane, prompt, config)
     if not prompt or prompt:match("^%s*$") then
         wezterm.log_info("Empty prompt, cancelling AI request")
         return
     end
 
-    -- Show loading indicator
+    -- Enter alternate screen mode
+    enter_ai_mode(pane)
+    
+    -- Show loading indicator in alternate screen
     if config.show_loading then
-        show_loading(pane, true)
+        pane:send_text("🤖 AI is thinking...\r\n\r\n")
+        pane:send_text("Processing your request: " .. prompt .. "\r\n")
     end
 
     local provider = get_provider(config)
     if not provider then
-        wezterm.log_error("AI Helper: No valid provider found for type: ", config.type)
+        pane:send_text("❌ No valid provider found for type: " .. config.type .. "\r\n\r\n")
+        pane:send_text("Press Q to return to shell...")
         return
     end
 
@@ -199,31 +276,23 @@ local function handle_ai_request(window, pane, prompt, config)
         wezterm.log_info("AI Helper: AI response received, response: ", stdout)
         local response = parse_ai_response(stdout)
 
-        -- Display message if present
-        if response.message and response.message ~= "" then
-            pane:inject_output("\r\n💬 " .. response.message:gsub("[\n]", "\r\n"))
-        end
+        -- Store response data for key handling
+        ai_response_data = response
+        ai_mode_active = true
 
-        -- Clear current line and send command if present
-        clear_current_line(pane)
+        -- Display the AI interface with response
+        display_ai_interface(pane, response.message, response.command)
         
-        if response.command and response.command ~= "" then
-            pane:send_text(response.command)
-        else
-            -- if no command, just clear the line and add a new prompt
-            pane:send_text("\r")
-        end
     else
-        -- Handle errors
+        -- Handle errors in alternate screen
         local error_msg = "❌ AI request failed"
         if err and err ~= "" then
             error_msg = error_msg .. ": " .. err
             wezterm.log_error("AI Helper err: ", err)
         end
-        pane:inject_output("\r\n" .. error_msg)
-
-        -- Still clear the line for user convenience
-        clear_current_line(pane)
+        
+        pane:send_text(error_msg .. "\r\n\r\n")
+        pane:send_text("Press Q to return to shell...")
     end
 end
 
