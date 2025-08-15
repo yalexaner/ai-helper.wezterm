@@ -13,12 +13,19 @@ local function findPluginPackagePath(search_pattern)
     return nil
 end
 
-local plugin_path = findPluginPackagePath("ai-helpersDswezterm")
-if plugin_path then
-    package.path = package.path .. ";" .. plugin_path
-else
-    wezterm.log_warn("AI Helper: Could not find plugin directory, some modules may not load correctly")
-end
+-- Since the plugin is local, hardcode its path relative to the wezterm config dir.                                                                     │
+-- local separator = package.config:sub(1, 1) == "\\" and "\\" or "/"                                                                                      │
+local plugin_path = wezterm.config_dir .. "\\" .. "ai-helper-wezterm" .. "\\" .. "plugin" .. "\\" .. "?.lua"
+package.path = package.path .. ";" .. plugin_path
+wezterm.log_info("AI Helper: Using hardcoded plugin path: " .. plugin_path)
+
+-- local plugin_path = findPluginPackagePath("ai-helper-wezterm")
+-- wezterm.log_error("AI Helper: Found plugin path at: " .. tostring(plugin_path))
+-- if plugin_path then
+    -- package.path = package.path .. ";" .. plugin_path
+-- else
+    -- wezterm.log_warn("AI Helper: Could not find plugin directory, some modules may not load correctly")
+-- end
 
 -- Setup luarocks path function that can be called with config
 local function setup_luarocks(config)
