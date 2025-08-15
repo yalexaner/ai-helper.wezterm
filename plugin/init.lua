@@ -1,6 +1,11 @@
 local wezterm = require("wezterm")
 local act = wezterm.action
 
+-- os detection utility function
+local function is_windows()
+    return package.config:sub(1, 1) == "\\"
+end
+
 local function findPluginPackagePath(search_pattern)
     local separator = package.config:sub(1, 1) == "\\" and "\\" or "/"
     for _, v in ipairs(wezterm.plugin.list()) do
@@ -29,15 +34,19 @@ wezterm.log_info("AI Helper: Using hardcoded plugin path: " .. plugin_path)
 
 -- Setup luarocks path function that can be called with config
 local function setup_luarocks(config)
-    local luarocks_bin = config.luarocks_path or "/opt/homebrew/bin/luarocks"
+    local luarocks_bin = config.luarocks_path or (is_windows() and "luarocks" or "/opt/homebrew/bin/luarocks")
     local io = require("io")
-    local ok, handle = pcall(io.popen, luarocks_bin .. " path --bin 2>&1")
+    local command = is_windows() and 
+        luarocks_bin .. " path --bin 2>nul" or 
+        luarocks_bin .. " path --bin 2>&1"
+    
+    local ok, handle = pcall(io.popen, command)
     if ok and handle then
         local result = handle:read("*a")
         local exit_code = handle:close()
 
         if exit_code then
-            local luarocks_path = result:match("LUA_PATH=(.-)\n")
+            local luarocks_path = result:match("LUA_PATH=(.-)[\n\r]")
             if luarocks_path then
                 package.path = package.path .. ";" .. luarocks_path
                 wezterm.log_info("AI Helper: luarocks path added successfully")
@@ -58,7 +67,13 @@ local default_config = {
         key = "i",
         mods = "SUPER",
     },
-    system_prompt = "you are an assistant that specializes in CLI and macOS commands. "
+    system_prompt = is_windows() and 
+        "you are an assistant that specializes in CLI and Windows PowerShell commands. "
+        .. "you will be brief and to the point, if asked for commands print them in a way that's easy to copy, "
+        .. "otherwise just answer the question. concatenate commands with && or || for ease of use. "
+        .. "structure your output in a JSON schema with 2 fields: message and command"
+        or
+        "you are an assistant that specializes in CLI and macOS commands. "
         .. "you will be brief and to the point, if asked for commands print them in a way that's easy to copy, "
         .. "otherwise just answer the question. concatenate commands with && or || for ease of use. "
         .. "structure your output in a JSON schema with 2 fields: message and command",
@@ -66,7 +81,7 @@ local default_config = {
     show_loading = true,
     type = "local",
     api_key = nil,                                -- Only used for Google API
-    luarocks_path = "/opt/homebrew/bin/luarocks", -- Default path to luarocks binary
+    luarocks_path = is_windows() and "luarocks" or "/opt/homebrew/bin/luarocks", -- Default path to luarocks binary
 }
 
 local function get_provider(config)
@@ -105,6 +120,17 @@ end
 local function show_loading(pane, show)
     if show then
         pane:inject_output("\r\n🤖 AI is thinking...")
+    end
+end
+
+-- os-specific line clearing function
+local function clear_current_line(pane)
+    if is_windows() then
+        -- on windows, use escape sequence to clear line
+        pane:send_text("\x1b[2K\x1b[0G") -- clear line and move cursor to beginning
+    else
+        -- on unix, use ctrl+u to clear line
+        pane:send_text("\u{15}") -- ctrl+u to clear line
     end
 end
 
@@ -179,11 +205,13 @@ local function handle_ai_request(window, pane, prompt, config)
         end
 
         -- Clear current line and send command if present
-        pane:send_text("\u{15}") -- Ctrl+U to clear line
-        pane:send_text("\r")
-
+        clear_current_line(pane)
+        
         if response.command and response.command ~= "" then
             pane:send_text(response.command)
+        else
+            -- if no command, just clear the line and add a new prompt
+            pane:send_text("\r")
         end
     else
         -- Handle errors
@@ -195,8 +223,7 @@ local function handle_ai_request(window, pane, prompt, config)
         pane:inject_output("\r\n" .. error_msg)
 
         -- Still clear the line for user convenience
-        pane:send_text("\u{15}")
-        pane:send_text("\r")
+        clear_current_line(pane)
     end
 end
 
