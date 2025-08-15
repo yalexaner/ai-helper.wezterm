@@ -42,23 +42,17 @@ local function generate_content(config, prompt)
 
     local body = dkjson.encode(request_body)
 
-    -- Use curl instead of http.request
-    local curl_command = string.format(
-        'curl -s -X POST "%s" -H "Content-Type: application/json" -d %s',
+    local success, response_body, stderr = wezterm.run_child_process({
+        "curl",
+        "-s",
+        "-X", "POST",
         url,
-        string.format("'%s'", body:gsub("'", "'\"'\"'"))
-    )
+        "-H", "Content-Type: application/json",
+        "-d", body,
+    })
 
-    local handle = io.popen(curl_command)
-    if not handle then
-        return false, nil, "Failed to execute HTTP request"
-    end
-
-    local response_body = handle:read("*a")
-    local success, _, exit_code = handle:close()
-
-    if not success or exit_code ~= 0 then
-        return false, nil, "HTTP request failed with exit code: " .. (exit_code or "unknown")
+    if not success then
+        return false, nil, stderr or "Failed to execute HTTP request"
     end
 
     if response_body == "" then
